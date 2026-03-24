@@ -1,0 +1,54 @@
+policy_class: MultiInputPolicy
+policy:
+  feature_extractor_class: StateTargetDepthEsdfExtractor
+  feature_extractor_kwargs:
+    activation_fn: leaky_relu
+    net_arch:
+      state:
+        mlp_layer: [192]
+        bn: False
+        ln: True
+      target:
+        mlp_layer: [192]
+        bn: False
+        ln: True
+      depth:
+        input_max_pool_H_W: [12, 16]
+        kernel_size: [2, 3, 3]
+        channels: [32, 64, 128]
+        padding: [0, 0, 0]
+        stride: [1, 1, 1]
+        cnn_bn: False
+        mlp_layer: [192]
+        bn: False
+        ln: True
+      esdf_proj:
+        kernel_size: [2, 3, 3]
+        channels: [16, 32, 64]
+        padding: [0, 0, 0]
+        stride: [1, 1, 1]
+        cnn_bn: False
+        mlp_layer: [192]
+        bn: False
+        ln: True
+      concatenate: True
+  planner_head_kwargs:
+    mlp_layer: [192]
+    num_candidates: 15
+    yaw_bins: [-60, -30, 0, 30, 60]
+    pitch_bins: [-20, 0, 20]
+  net_arch:
+    recurrent:
+      class: LSTMCell
+      kwargs:
+        hidden_size: 256
+    mlp_layer: [4]
+  activation_fn: leaky_relu
+  output_activation_fn: acceleration_bounded_yaw
+  device: cuda
+
+update_env_kwargs:
+  action_type: THRUST_YAW
+  inertial_frame: START
+  target_type: TARGET_VELOCITY_TARGET_DISTANCE
+  # target_type: TARGET_VELOCITY
