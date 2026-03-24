@@ -69,13 +69,6 @@ env:
       orientation: [0, 0, 0]
       far: 20.
       near: 0.25
-  esdf_builder_kwargs:
-    window: 4
-    update_interval: 2
-    grid_resolution: 0.25
-    grid_size: [32, 32, 16]
-    projection_size: [12, 16]
-    clip_distance: 2.0
   target_kwargs:
     success_radius: 0.1
   reward_kwargs:
@@ -89,7 +82,6 @@ env:
     lambda_yaw: 4.0
     lambda_vmax: 1.0
     falloff_dis: 1.0
-    use_geodesic_reward_direction: False
   max_episode_steps: 600
   device: cpu
 
@@ -99,17 +91,9 @@ train_bptt:
   learning_rate_init: 0.001
   learning_rate_final: 0.0005
   weight_decay: 0.01
-  horizon: 300
+  horizon: 150
   gamma: 1.0
   log_interval: 100
   checkpoint_interval: 500
   early_stop_reward_threshold: -150
   device: cuda
-  teacher_score_kwargs:
-    primitive_length: 1.5
-    num_samples: 6
-    progress_weight: 1.0
-    clearance_weight: 0.7
-    heading_weight: 0.2
-  planner_ce_weight: 0.3
-  planner_mse_weight: 0.1

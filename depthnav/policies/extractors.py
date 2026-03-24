@@ -7,7 +7,7 @@ from typing import List, Optional, Type, Union, Dict
 from torchvision import models
 from abc import abstractmethod
 
-#特征提取器工厂：StateExtractor / ImageExtractor / StateTargetImageExtractor 
+
 class FeatureExtractor(nn.Module):
     activation_fn_alias = {
         "relu": nn.ReLU,
@@ -355,7 +355,7 @@ class ImageExtractor(FeatureExtractor):
         activation_fn: Type[nn.Module] = nn.ReLU,
     ):
         assert any(
-            "semantic" in key or "color" in key or "depth" in key or "esdf" in key
+            "semantic" in key or "color" in key or "depth" in key
             for key in observation_space.keys()
         )
         super().__init__(
@@ -372,15 +372,9 @@ class ImageExtractor(FeatureExtractor):
         """
         _image_features_dims = 0
         self._image_extractor_names = []
-        self._input_max_pool_H_W = {}
         # for key in observation_space.keys():
         for key in net_arch.keys():
-            if (
-                "semantic" in key
-                or "color" in key
-                or "depth" in key
-                or "esdf" in key
-            ):
+            if "semantic" in key or "color" in key or "depth" in key:
                 _image_features_dims += self.set_cnn_feature_extractor(
                     key, observation_space[key], net_arch.get(key, {}), activation_fn
                 )
@@ -389,35 +383,25 @@ class ImageExtractor(FeatureExtractor):
     def extract(self, observations) -> th.Tensor:
         features = []
         for name in self._image_extractor_names:
-            obs_key = name.rsplit("_extractor", 1)[0]
-            image = observations[obs_key]
-            if "depth" in obs_key:
-                image = self.preprocess_depth(image, obs_key)
-            elif "esdf" in obs_key:
-                image = self.preprocess_esdf(image, obs_key)
+            image = observations[name.split("_")[0]]
+            if "depth" in name:
+                image = self.preprocess_depth(image)
             x = getattr(self, name)(image)
             features.append(x)
         combined_features = th.cat(features, dim=1)
 
         return combined_features
 
-    def preprocess_depth(self, depth: th.Tensor, name: str = "depth"):
+    def preprocess_depth(self, depth: th.Tensor):
         depth = depth.float()
         inv_depth = 1.0 / (depth + 1e-6)
 
-        if name in self._input_max_pool_H_W:
+        if hasattr(self, "input_max_pool_H_W"):
             # apply max pooling
             # note this preserves closer objects, since we use inverted depth
-            H, W = self._input_max_pool_H_W[name]
+            H, W = self.input_max_pool_H_W
             inv_depth = F.adaptive_max_pool2d(inv_depth, (H, W))
         return inv_depth
-
-    def preprocess_esdf(self, esdf: th.Tensor, name: str = "esdf_proj"):
-        esdf = esdf.float()
-        if name in self._input_max_pool_H_W:
-            H, W = self._input_max_pool_H_W[name]
-            esdf = -F.adaptive_max_pool2d(-esdf, (H, W))
-        return esdf
 
     def set_cnn_feature_extractor(
         self, name, observation_space, net_arch, activation_fn
@@ -429,7 +413,7 @@ class ImageExtractor(FeatureExtractor):
         in_channels = observation_space.shape[0]
         if "input_max_pool_H_W" in net_arch:
             H, W = net_arch["input_max_pool_H_W"]
-            self._input_max_pool_H_W[name] = tuple(net_arch["input_max_pool_H_W"])
+            self.input_max_pool_H_W = net_arch["input_max_pool_H_W"]
             observation_shape = (in_channels, H, W)
         else:
             observation_shape = observation_space.shape
@@ -661,15 +645,3 @@ class StateTargetImageExtractor(ImageExtractor):
         else:
             combined_feature = state_features + target_features + image_features
         return combined_feature
-
-
-class StateTargetDepthEsdfExtractor(StateTargetImageExtractor):
-    def __init__(
-        self,
-        observation_space: spaces.Dict,
-        net_arch: Dict = {},
-        activation_fn: Type[nn.Module] = nn.ReLU,
-    ):
-        obs_keys = list(observation_space.spaces)
-        assert ("state" in obs_keys) and ("target" in obs_keys) and ("esdf_proj" in obs_keys)
-        super().__init__(observation_space, net_arch, activation_fn)

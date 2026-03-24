@@ -4,7 +4,6 @@ import time
 from typing import Any, Union, Optional, Type, Dict, TypeVar, ClassVar, List
 
 import torch as th
-import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 
@@ -20,7 +19,7 @@ from .mlp_policy import MlpPolicy
 from ..common import observation_to_device, rgba2rgb, ExitCode
 from depthnav.scripts.eval_logger import Evaluate
 
-#核心训练器：BPTT 算法，AdamW + 余弦 LR，梯度裁剪，TensorBoard 日志，checkpoint
+
 class BPTT:
     """
     Back Propagation Through Time (BPTT).
@@ -47,9 +46,6 @@ class BPTT:
         early_stop_reward_threshold: float = -th.inf,
         checkpoint_interval: int = 1000,
         device: Optional[Union[str, th.device]] = "cpu",
-        teacher_score_kwargs: Optional[Dict[str, Any]] = None,
-        planner_ce_weight: float = 0.3,
-        planner_mse_weight: float = 0.1,
     ):
         self.logging_dir = os.path.abspath(logging_dir)
         self.run_path = self._create_run_path(run_name)
@@ -76,9 +72,6 @@ class BPTT:
         self.log_interval = log_interval
         self.early_stop_reward_threshold = early_stop_reward_threshold
         self.checkpoint_interval = checkpoint_interval
-        self.teacher_score_kwargs = teacher_score_kwargs or {}
-        self.planner_ce_weight = planner_ce_weight
-        self.planner_mse_weight = planner_mse_weight
 
         self.whitelisted_tensorboard_keys = [
             "avg_reward",
@@ -126,11 +119,6 @@ class BPTT:
         print(f"Saving to {filepath}")
         self.policy.save(filepath)
 
-    def _normalize_candidate_scores(self, scores: th.Tensor) -> th.Tensor:
-        score_min = scores.min(dim=1, keepdim=True).values
-        score_max = scores.max(dim=1, keepdim=True).values
-        return (scores - score_min) / (score_max - score_min + 1e-6)
-
     def learn(self, render=False, start_iter=0) -> ExitCode:
         """
         Train policy using BPTT, return True when finished training
@@ -147,23 +135,14 @@ class BPTT:
         try:
             self.env.reset()
             episode_steps = 0
-            latent_state = (
-                self.policy.init_latent(self.env.num_envs, self.policy.device)
-                if getattr(self.policy, "is_recurrent", False)
-                and hasattr(self.policy, "init_latent")
-                else None
+            latent_state = th.zeros(
+                (self.env.num_envs, self.policy.latent_dim), device=self.policy.device
             )
             for iter in tqdm(range(self.iterations)):
                 timerlog.timer.tic("iteration")
 
                 self.policy.train()
-                reward_loss = th.zeros(
-                    self.env.num_envs, dtype=th.float32, device=self.device
-                )
-                planner_ce_accum = th.tensor(0.0, device=self.device)
-                planner_mse_accum = th.tensor(0.0, device=self.device)
-                planner_steps = 0
-                planner_metric_accum: Dict[str, float] = {}
+                loss = 0.0
                 fps_start = time.time_ns()
                 discount_factor = th.ones(
                     self.env.num_envs, dtype=th.float32, device=self.device
@@ -173,80 +152,28 @@ class BPTT:
                 if episode_steps >= self.env.max_episode_steps:
                     self.env.reset()
                     episode_steps = 0
-                    latent_state = (
-                        self.policy.init_latent(self.env.num_envs, self.policy.device)
-                        if getattr(self.policy, "is_recurrent", False)
-                        and hasattr(self.policy, "init_latent")
-                        else None
-                    )
 
                 # rollout policy over horizon steps
                 for _ in range(self.horizon):
                     obs = self.env.get_observation()
-                    #坐标转换，habitat-sim坐标系转换为body坐标系
                     obs = observation_to_device(obs, self.policy.device)
-                    #前向传播，计算动作
                     if type(self.policy) == MlpPolicy:
                         actions = self.policy(obs["state"])
                     else:
-                        aux_dict = {}
-                        next_latent_state = latent_state
-                        if hasattr(self.policy, "forward_aux"):
-                            if self.policy.is_recurrent:
-                                actions, next_latent_state, aux_dict = self.policy.forward_aux(
-                                    obs, latent_state
-                                )
-                            else:
-                                actions, _, aux_dict = self.policy.forward_aux(obs)
+                        if self.policy.is_recurrent:
+                            actions, latent_state = self.policy(obs, latent_state)
                         else:
-                            if self.policy.is_recurrent:
-                                actions, next_latent_state = self.policy(obs, latent_state)
-                            else:
-                                actions = self.policy(obs)
-
-                        if (
-                            getattr(self.policy, "has_planner_head", False)
-                            and "planner_logits" in aux_dict
-                            and hasattr(self.env, "compute_planner_teacher")
-                        ):
-                            teacher = self.env.compute_planner_teacher(
-                                self.policy.get_candidate_directions(self.env.device),
-                                **self.teacher_score_kwargs,
-                            )
-                            if teacher is not None:
-                                teacher_scores = teacher["scores"].to(self.device)
-                                teacher_indices = teacher["best_indices"].to(self.device)
-                                planner_logits = aux_dict["planner_logits"]
-                                planner_ce = F.cross_entropy(
-                                    planner_logits, teacher_indices
-                                )
-                                planner_mse = F.mse_loss(
-                                    self._normalize_candidate_scores(planner_logits),
-                                    teacher_scores,
-                                )
-                                planner_ce_accum = planner_ce_accum + planner_ce
-                                planner_mse_accum = planner_mse_accum + planner_mse
-                                planner_steps += 1
-                                for metric_name, metric_value in teacher["metrics"].items():
-                                    planner_metric_accum[metric_name] = (
-                                        planner_metric_accum.get(metric_name, 0.0)
-                                        + float(metric_value)
-                                    )
-                        latent_state = next_latent_state
+                            actions = self.policy(obs)
 
                     # step
                     obs, reward, done, info = self.env.step(actions, is_test=False)
                     reward = reward.to(self.device)
                     done = done.to(self.device).to(th.bool)
-                    reward_loss = reward_loss + -1.0 * reward * discount_factor
+                    loss = loss + -1.0 * reward * discount_factor
 
                     # if done, reset discount factor and latents
                     discount_factor = discount_factor * self.gamma * ~done + done
-                    if getattr(self.policy, "is_recurrent", False):
-                        if hasattr(self.policy, "mask_latent"):
-                            latent_state = self.policy.mask_latent(latent_state, done)
-                        elif latent_state is not None:
-                            latent_state = latent_state * ~done.unsqueeze(1)
+                    latent_state = latent_state * ~done.unsqueeze(1)
 
                 episode_steps += self.horizon
                 total_steps = self.env.num_envs * self.horizon
@@ -256,23 +183,8 @@ class BPTT:
                 fps = int(total_steps / time_elapsed)
 
                 # backprop
-                reward_loss = reward_loss / self.horizon  # average across the rollout
-                reward_loss = reward_loss.mean()  # average across the batch
-                planner_ce_term = (
-                    planner_ce_accum / planner_steps
-                    if planner_steps > 0
-                    else th.tensor(0.0, device=self.device)
-                )
-                planner_mse_term = (
-                    planner_mse_accum / planner_steps
-                    if planner_steps > 0
-                    else th.tensor(0.0, device=self.device)
-                )
-                loss = (
-                    reward_loss
-                    + self.planner_ce_weight * planner_ce_term
-                    + self.planner_mse_weight * planner_mse_term
-                )
+                loss = loss / self.horizon  # average across the rollout
+                loss = loss.mean()  # average across the batch
                 self.optimizer.zero_grad()
                 loss.backward()
 
@@ -289,10 +201,7 @@ class BPTT:
 
                 # detach gradients
                 self.env.detach()
-                if hasattr(self.policy, "detach_latent"):
-                    latent_state = self.policy.detach_latent(latent_state)
-                elif latent_state is not None:
-                    latent_state = latent_state.clone().detach()
+                latent_state = latent_state.clone().detach()
                 timerlog.timer.toc("iteration")
 
                 timerlog.timer.tic("eval")
@@ -344,15 +253,6 @@ class BPTT:
                         "train/learning_rate", self.lr_schedule.get_last_lr()[0]
                     )
                     self._logger.record("train/loss", float(loss))
-                    self._logger.record("train/reward_loss", float(reward_loss))
-                    self._logger.record("train/planner_ce", float(planner_ce_term))
-                    self._logger.record("train/planner_mse", float(planner_mse_term))
-                    if planner_steps > 0:
-                        for metric_name, metric_value in planner_metric_accum.items():
-                            self._logger.record(
-                                f"train/{metric_name}",
-                                metric_value / float(planner_steps),
-                            )
                     self._logger.record("train/grad_norm", float(grad_norm))
                     self._logger.record("train/steps_per_second", fps)
                     self._logger.dump(start_iter + iter)

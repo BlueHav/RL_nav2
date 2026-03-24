@@ -27,8 +27,6 @@ from .dataloader import SimpleDataLoader, ChildrenPathDataset
 
 import skfmm
 import scipy.ndimage
-#Habitat-Sim 管理 
-#加载FMM3D的代码，计算距离场和速度场
 
 DEBUG = False
 
@@ -527,7 +525,6 @@ class SceneManager:
     def get_observation(self, indices: Optional[int] = None):
         obses = []
         if indices is None:
-            # 获取所有智能体的观测
             for scene in self.scenes:
                 agent_observations = scene.get_sensor_observations(
                     list(range(self.num_agent_per_scene))
@@ -1087,7 +1084,6 @@ class SceneManager:
         )
         return agent_cfg
 
-    #配置图像传感器
     def _load_sensor(self) -> List[habitat_sim.sensor.SensorSpec]:
         """load sensors configuration of each agent"""
         sensor_cfgs_list = []
@@ -1141,32 +1137,27 @@ class SceneManager:
 
     def fmm_3d(self, occupancy, target_ijk, grid_resolution):
         # compute truncated distance from obstacles
-        # # ---------- 1. 基础距离场 ----------
         dist_outside = grid_resolution * scipy.ndimage.distance_transform_edt(
             occupancy == 0
         )
-        tsdf = np.clip(dist_outside, 0.0, 1.0)#对于大于1m的障碍物距离，直接认为是安全的，不需要区分更远的距离了
+        tsdf = np.clip(dist_outside, 0.0, 1.0)
 
         # speed is a piecewise function related to distance to nearest obstacle
         ROBOT_RADIUS = 0.3
         SAFE_RADIUS = 0.6
         SLOW_SPEED = 0.1
         # above SAFE_RADIUS, speed is 1
-        #速度场，全局初始化为1
         speed = np.ones_like(tsdf)
 
         # between ROBOT_RADIUS and SAFE_RADIUS, linearly interpolate speed
         m = (SAFE_RADIUS - SLOW_SPEED) / (SAFE_RADIUS - ROBOT_RADIUS)
         b = SLOW_SPEED - m * ROBOT_RADIUS
-        #获得距离障碍物在0.3-0.6m之间的区域，速度线性变化；
         mask1 = (ROBOT_RADIUS < tsdf) & (tsdf <= SAFE_RADIUS)
         speed[mask1] = m * tsdf[mask1] + b
 
         # below ROBOT_RADIUS, set speed to SLOW_SPEED
-        #获得距离障碍物小于0.3m的区域，速度为0.1；
         mask2 = (0 < tsdf) & (tsdf <= ROBOT_RADIUS)
         speed[mask2] = SLOW_SPEED
-        #在障碍物内部，速度为0
         speed[occupancy == 1] = 0
 
         # target point (source of wavefront)

@@ -196,11 +196,8 @@ class Evaluate:
 
         eval_info_id_list = [i for i in range(self.env.num_envs)]
 
-        latent_state = (
-            self.policy.init_latent(self.env.num_envs, self.policy.device)
-            if getattr(self.policy, "is_recurrent", False)
-            and hasattr(self.policy, "init_latent")
-            else None
+        latent_state = th.zeros(
+            (self.env.num_envs, self.policy.latent_dim), device=self.policy.device
         )
         while True:
             obs = observation_to_device(self.env.get_observation(), self.policy.device)
@@ -212,10 +209,6 @@ class Evaluate:
             else:
                 action = self.policy(obs["state"])
             obs, reward, terminated, infos = self.env.step(action, is_test=True)
-            if getattr(self.policy, "is_recurrent", False) and hasattr(
-                self.policy, "mask_latent"
-            ):
-                latent_state = self.policy.mask_latent(latent_state, terminated.to(th.bool))
 
             if render:
                 self.render_kwargs["points"] = th.cat(

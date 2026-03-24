@@ -179,11 +179,8 @@ class Evaluate:
         target_vel = th.zeros((self.env.num_envs, self.env.max_episode_steps))
         loss_metrics = [{} for _ in range(self.env.num_envs)]
 
-        latent_state = (
-            self.policy.init_latent(self.env.num_envs, self.policy.device)
-            if getattr(self.policy, "is_recurrent", False)
-            and hasattr(self.policy, "init_latent")
-            else None
+        latent_state = th.zeros(
+            (self.env.num_envs, self.policy.latent_dim), device=self.policy.device
         )
         i = 0
         while True:
@@ -197,10 +194,6 @@ class Evaluate:
             else:
                 action = self.policy(obs["state"])
             obs, reward, terminated, infos = self.env.step(action, is_test=True)
-            if getattr(self.policy, "is_recurrent", False) and hasattr(
-                self.policy, "mask_latent"
-            ):
-                latent_state = self.policy.mask_latent(latent_state, terminated.to(th.bool))
             self.first_collision = self.env.is_collision & ~self.collided
             self.collided = self.collided | self.env.is_collision
 
@@ -234,14 +227,12 @@ class Evaluate:
         depth[depth < 1e-6] = 1e-6
         inv_depth = 1.0 / depth
 
-        input_max_pool = getattr(self.policy.feature_extractor, "input_max_pool_H_W", None)
-        if input_max_pool is None and hasattr(self.policy.feature_extractor, "_input_max_pool_H_W"):
-            input_max_pool = self.policy.feature_extractor._input_max_pool_H_W.get("depth")
-        if input_max_pool is not None:
+        if hasattr(self.policy.feature_extractor, "input_max_pool_H_W"):
             # apply max pooling
             # note this preserves closer objects, since we use inverted depth
-            H, W = input_max_pool
+            H, W = self.policy.feature_extractor.input_max_pool_H_W
             inv_depth = F.adaptive_max_pool2d(inv_depth, (H, W))
+            pass
         return inv_depth
 
     def render(self, render_list, observations, dones):

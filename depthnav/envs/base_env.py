@@ -13,7 +13,6 @@ from ..utils import Rotation3
 from ..utils.type import Uniform, Normal, Cylinder
 from ..common import habitat_to_std
 from .scene_manager import SceneManager, Bounds
-from .local_esdf import OnlineLocalEsdfBuilder
 
 
 class BaseEnv:
@@ -33,7 +32,6 @@ class BaseEnv:
         bounds: Optional[Union[Bounds, Dict]] = None,
         scene_kwargs: Optional[Dict] = None,
         sensor_kwargs: Optional[List] = None,
-        esdf_builder_kwargs: Optional[Dict] = None,
     ):
         # constants
         self.num_envs = num_envs
@@ -80,13 +78,6 @@ class BaseEnv:
 
         self.scene_manager = None
         self.single_env = single_env
-        self.esdf_builder_kwargs = esdf_builder_kwargs
-        self.local_esdf_builder: Optional[OnlineLocalEsdfBuilder] = None
-        self.use_local_esdf = (
-            visual
-            and esdf_builder_kwargs is not None
-            and esdf_builder_kwargs.get("enabled", True)
-        )
         if visual:
             num_scene = 1 if single_env else num_envs
             num_agent_per_scene = num_envs if single_env else 1
@@ -150,25 +141,6 @@ class BaseEnv:
                         dtype=np.float32,
                     )
                 }
-            )
-
-        if self.use_local_esdf:
-            depth_sensors = [
-                sensor for sensor in (sensor_kwargs or []) if "depth" in sensor["sensor_type"]
-            ]
-            if len(depth_sensors) == 0:
-                raise ValueError("esdf_builder_kwargs requires at least one depth sensor")
-            self.local_esdf_builder = OnlineLocalEsdfBuilder(
-                num_envs=self.num_envs,
-                sensor_cfg=depth_sensors[0],
-                device=self.device,
-                kwargs=esdf_builder_kwargs,
-            )
-            self.observation_space.spaces["esdf_proj"] = spaces.Box(
-                low=-1.0,
-                high=1.0,
-                shape=[1] + list(self.local_esdf_builder.projection_size),
-                dtype=np.float32,
             )
 
         self.action_space = spaces.Box(
@@ -394,21 +366,17 @@ class BaseEnv:
             self.scene_manager.reset_agents(
                 std_positions=pos, std_orientations=rot.to_quat(), indices=indices
             )
-            if self.use_local_esdf and self.local_esdf_builder is not None:
-                self.local_esdf_builder.reset(indices.cpu().tolist())
             self.update_observation(og_indices)
 
         self.update_collision(indices)
 
     def update_observation(self, indices: Optional[int] = None):
-        env_indices = indices
         if indices is None:
             img_obs = self.scene_manager.get_observation()
         else:
             img_obs = self.scene_manager.get_observation(indices)
             sensor_device = "cuda" if self.scene_manager.gpu2gpu else "cpu"
             indices = indices.to(sensor_device)
-
         for sensor_uuid in self._visual_sensor_list:
             if "depth" in sensor_uuid:
                 sensor_spec = [
@@ -442,24 +410,6 @@ class BaseEnv:
                 self._sensor_obs[sensor_uuid] = img
             else:
                 self._sensor_obs[sensor_uuid][indices] = img
-        if self.use_local_esdf and self.local_esdf_builder is not None:
-            depth_uuid = self.local_esdf_builder.sensor_uuid
-            if env_indices is None:
-                depth_batch = self._sensor_obs[depth_uuid]
-                positions = self.position
-                rotations = self.rot_wb.R
-                env_indices = None
-            else:
-                depth_batch = self._sensor_obs[depth_uuid][indices]
-                positions = self.position[env_indices]
-                rotations = self.rot_wb.R[env_indices]
-                env_indices = env_indices.detach().cpu().tolist()
-            self.local_esdf_builder.update(
-                depth_batch=depth_batch,
-                positions=positions,
-                rotations_wb=rotations,
-                indices=env_indices,
-            )
         # self._sensor_obs["IMU"] = self._generate_noise_obs("IMU")
 
     def _create_rng(
@@ -582,13 +532,6 @@ class BaseEnv:
         self._step_count = self._step_count.clone().detach()
         self._done = self._done.clone().detach()
 
-    def query_local_esdf(
-        self, points_body: th.Tensor, indices: Optional[List[int]] = None
-    ) -> th.Tensor:
-        if not self.use_local_esdf or self.local_esdf_builder is None:
-            raise RuntimeError("Local ESDF is not enabled")
-        return self.local_esdf_builder.query(points_body, env_indices=indices)
-
     def close(self):
         self.scene_manager.close() if self.visual else None
 
@@ -606,12 +549,6 @@ class BaseEnv:
         else:
             raise NotImplementedError
         return gradient
-
-    @property
-    def esdf_proj(self):
-        if not self.use_local_esdf or self.local_esdf_builder is None:
-            raise RuntimeError("Local ESDF is not enabled")
-        return self.local_esdf_builder.get_projection()
 
     @property
     def t(self):

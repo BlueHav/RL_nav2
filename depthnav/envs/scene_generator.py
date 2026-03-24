@@ -13,7 +13,7 @@ from copy import deepcopy
 from depthnav.common import std_to_habitat
 from depthnav.utils.type import Uniform, Normal
 from depthnav.utils.rotation3 import Rotation3
-#离线场景生成
+
 empty_scene = {
     "stage_instance": {
         "template_name": "",

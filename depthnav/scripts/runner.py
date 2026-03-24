@@ -2,7 +2,6 @@ import subprocess
 import os
 import re
 import sys
-import shlex
 import yaml
 import time
 from copy import deepcopy
@@ -56,12 +55,8 @@ def run_with_retries(command, max_retries=5):
     attempt = 0
     while attempt < max_retries:
         try:
-            print(shlex.join(command))
             p = subprocess.Popen(
-                command,
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-                text=True,
+                command, stdout=sys.stdout, stderr=sys.stderr, text=True, shell=True
             )
             p.wait()
             if p.returncode == ExitCode.SUCCESS.value:
@@ -69,7 +64,7 @@ def run_with_retries(command, max_retries=5):
             else:
                 attempt += 1
                 print(
-                    f"Attempt {attempt}: {shlex.join(command)} failed with return code {p.returncode}"
+                    f"Attempt {attempt}: {command} failed with return code {p.returncode}"
                 )
                 time.sleep(1)
         except KeyboardInterrupt:
@@ -77,7 +72,7 @@ def run_with_retries(command, max_retries=5):
             p.kill()
             sys.exit(ExitCode.KEYBOARD_INTERRUPT.value)
         except Exception as e:
-            print(f"Error while running {shlex.join(command)}:\n{e}")
+            print(f"Error while running {command}:\n{e}")
             attempt += 1
             time.sleep(1)
     return False
@@ -100,15 +95,6 @@ def run_experiment(
     print("RUNNING EXPERIMENT")
     print(experiment_dir)
 
-    if not os.path.exists(script):
-        raise FileNotFoundError(f"Could not find training script: {script}")
-    if eval_configs is None:
-        eval_configs = []
-    if eval_csvs is None:
-        eval_csvs = []
-    if eval_configs and len(eval_configs) != len(eval_csvs):
-        raise ValueError("eval_configs and eval_csvs must have the same length")
-
     num_runs = len(run_params)
     if type(base_config_files) == str:
         base_config_files = [base_config_files for _ in range(num_runs)]
@@ -118,16 +104,10 @@ def run_experiment(
 
     base_configs = []
     for base_config_file in base_config_files:
-        if not os.path.exists(base_config_file):
-            raise FileNotFoundError(f"Could not find base config file: {base_config_file}")
         with open(base_config_file, "r") as file:
             base_config = yaml.safe_load(file)
 
         if policy_config_file:
-            if not os.path.exists(policy_config_file):
-                raise FileNotFoundError(
-                    f"Could not find policy config file: {policy_config_file}"
-                )
             with open(policy_config_file, "r") as file:
                 policy_config = yaml.safe_load(file)
             base_config.update(policy_config)
@@ -143,10 +123,6 @@ def run_experiment(
     else:
         updated_eval_configs = []
         for eval_config_file in eval_configs:
-            if not os.path.exists(eval_config_file):
-                raise FileNotFoundError(
-                    f"Could not find eval config file: {eval_config_file}"
-                )
             with open(eval_config_file, "r") as file:
                 eval_config = yaml.safe_load(file)
 
@@ -175,16 +151,7 @@ def run_experiment(
     start_iter = 0
     for i, (run_name, run_config_file) in enumerate(zip(run_names, run_config_files)):
         print("=" * 80)
-        command = [
-            sys.executable,
-            script,
-            "--run_name",
-            run_name,
-            "--cfg_file",
-            run_config_file,
-            "--logging_root",
-            experiment_dir,
-        ]
+        command = f"python {script} --run_name {run_name} --cfg_file {run_config_file} --logging_root {experiment_dir}"
 
         if curriculum and i > 0:
             last_run_name = run_names[i - 1]
@@ -199,20 +166,21 @@ def run_experiment(
                     f"Could not find weights file matching {last_run_name}"
                 )
             last_run_pth = os.path.join(experiment_dir, last_run_matches[-1])
-            command.extend(["--weight", last_run_pth, "--start_iter", str(start_iter)])
+            command += f" --weight {last_run_pth}"
+            command += f" --start_iter {start_iter}"
 
         if len(updated_eval_configs) > 0:
-            command.append("--eval_configs")
-            command.extend(updated_eval_configs)
+            command += f" --eval_configs"
+            for eval_cfg in updated_eval_configs:
+                command += f" {eval_cfg}"
 
-            command.append("--eval_csvs")
-            command.extend(eval_csvs)
+            assert len(eval_configs) == len(eval_csvs)
+            command += f" --eval_csvs"
+            for eval_csv in eval_csvs:
+                command += f" {eval_csv}"
 
-        success = run_with_retries(command, max_retries)
-        if not success:
-            raise RuntimeError(
-                f"Experiment stage '{run_name}' failed after {max_retries} retries"
-            )
+        print(command)
+        run_with_retries(command, max_retries)
         # add number of iterations
         with open(run_config_file, "r") as file:
             run_config = yaml.safe_load(file)

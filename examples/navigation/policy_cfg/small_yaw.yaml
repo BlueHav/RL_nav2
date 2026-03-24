@@ -1,6 +1,6 @@
 policy_class: MultiInputPolicy
 policy:
-  feature_extractor_class: StateTargetDepthEsdfExtractor
+  feature_extractor_class: StateTargetImageExtractor
   feature_extractor_kwargs:
     activation_fn: leaky_relu
     net_arch:
@@ -22,26 +22,12 @@ policy:
         mlp_layer: [192]
         bn: False
         ln: True
-      esdf_proj:
-        kernel_size: [2, 3, 3]
-        channels: [16, 32, 64]
-        padding: [0, 0, 0]
-        stride: [1, 1, 1]
-        cnn_bn: False
-        mlp_layer: [192]
-        bn: False
-        ln: True
-      concatenate: True
-  planner_head_kwargs:
-    mlp_layer: [192]
-    num_candidates: 15
-    yaw_bins: [-60, -30, 0, 30, 60]
-    pitch_bins: [-20, 0, 20]
+      concatenate: False
   net_arch:
     recurrent:
-      class: LSTMCell
+      class: GRUCell
       kwargs:
-        hidden_size: 256
+        hidden_size: 192
     mlp_layer: [4]
   activation_fn: leaky_relu
   output_activation_fn: acceleration_bounded_yaw

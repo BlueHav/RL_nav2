@@ -4,7 +4,7 @@ import torch as th
 from typing import Optional, Tuple, List
 from scipy.spatial.transform import Rotation as Rotation
 from enum import Enum
-#坐标系转换（ENU ↔ Habitat-Sim）+ 全局枚举 ExitCode
+
 
 class ExitCode(Enum):
     SUCCESS = 0

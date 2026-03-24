@@ -2,7 +2,7 @@ import random
 import glob
 import os
 from torch.utils.data import Dataset
-#场景文件加载
+
 
 class SimpleDataLoader:
     def __init__(self, dataset, batch_size=1, shuffle=False):

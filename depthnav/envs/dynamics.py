@@ -7,7 +7,7 @@ from enum import Enum
 
 from depthnav.utils import Rotation3, is_multiple
 # from pylogtools import timerlog
-#可微分动力学：质点 Velocity Verlet 积分、控制平滑、空气阻力，支持 autograd
+
 CONTROL_LATENCY_CONV_MAX_CONTRIB = 0.01  # unitless
 
 

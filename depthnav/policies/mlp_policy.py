@@ -3,7 +3,7 @@ import torch as th
 from torch import nn
 import torch.nn.functional as F
 
-#基础 MLP 策略：全连接网络，末层可接 AccelerationBoundedYaw 输出激活
+
 class AccelerationBoundedYaw(nn.Module):
     def __init__(self, min_yaw=-th.pi, max_yaw=th.pi):
         super().__init__()

@@ -11,7 +11,7 @@ from .base_env import BaseEnv
 from .scene_manager import Bounds
 from ..utils.type import Uniform, Normal
 from ..utils import Rotation3
-#导航任务 继承 BaseEnv，实现目标采样、BNL 奖励函数、偏航控制
+
 
 class ActionType(Enum):
     THRUST_FIXED_YAW = 0
@@ -63,7 +63,6 @@ class NavigationEnv(BaseEnv):
         bounds: Optional[Union[Bounds, Dict]] = None,
         scene_kwargs: Optional[Dict] = None,
         sensor_kwargs: Optional[List] = None,
-        esdf_builder_kwargs: Optional[Dict] = None,
     ):
         # allow policies to configure their own actions, inertial frames, and obs
         self.action_type = get_enum(ActionType, action_type)
@@ -85,7 +84,6 @@ class NavigationEnv(BaseEnv):
             bounds=bounds,
             scene_kwargs=scene_kwargs,
             sensor_kwargs=sensor_kwargs,
-            esdf_builder_kwargs=esdf_builder_kwargs,
         )
 
         # target generator
@@ -314,8 +312,6 @@ class NavigationEnv(BaseEnv):
         }
         if self.visual:
             obs["depth"] = self.sensor_obs["depth"]
-            if self.use_local_esdf:
-                obs["esdf_proj"] = self.esdf_proj.to(self.device)
         if self.target_type == TargetType.TARGET_VELOCITY:
             obs["target"] = target_velocity.to(self.device)
         elif self.target_type == TargetType.TARGET_VELOCITY_TARGET_DISTANCE:
@@ -328,88 +324,6 @@ class NavigationEnv(BaseEnv):
             ).to(self.device)
 
         return obs
-
-    def _normalize_candidate_scores(self, scores: th.Tensor) -> th.Tensor:
-        score_min = scores.min(dim=1, keepdim=True).values
-        score_max = scores.max(dim=1, keepdim=True).values
-        return (scores - score_min) / (score_max - score_min + 1e-6)
-
-    def compute_planner_teacher(
-        self,
-        candidate_directions_body: th.Tensor,
-        primitive_length: float = 1.5,
-        num_samples: int = 6,
-        progress_weight: float = 1.0,
-        clearance_weight: float = 0.7,
-        heading_weight: float = 0.2,
-    ):
-        if (
-            not self.visual
-            or not self.use_local_esdf
-            or self.local_esdf_builder is None
-            or not self.scene_manager.load_geodesics
-        ):
-            return None
-
-        candidate_directions_body = F.normalize(
-            candidate_directions_body.to(self.device), dim=1
-        )
-        num_candidates = candidate_directions_body.shape[0]
-        candidate_directions_world = (
-            self.rot_wb.R.unsqueeze(1)
-            @ candidate_directions_body.unsqueeze(0)
-            .expand(self.num_envs, num_candidates, 3)
-            .unsqueeze(-1)
-        ).squeeze(-1)
-
-        current_cost = self.geodesic_cost(self.position).unsqueeze(1)
-        end_positions = self.position.unsqueeze(1) + primitive_length * candidate_directions_world
-        if self.single_env:
-            geodesic_bounds = self.scene_manager.geodesics[0]["bb_std"].to(self.device)
-            end_positions = end_positions.clamp(
-                min=geodesic_bounds[0], max=geodesic_bounds[1]
-            )
-        end_cost = self.geodesic_cost(end_positions.reshape(-1, 3)).reshape(
-            self.num_envs, num_candidates
-        )
-        progress = current_cost - end_cost
-
-        sample_alphas = th.linspace(
-            0.0, primitive_length, num_samples, device=self.device
-        )
-        sample_points_body = (
-            candidate_directions_body.unsqueeze(0).unsqueeze(2)
-            * sample_alphas.view(1, 1, num_samples, 1)
-        ).expand(self.num_envs, num_candidates, num_samples, 3)
-        clearance = self.query_local_esdf(
-            sample_points_body.reshape(self.num_envs, -1, 3)
-        ).reshape(self.num_envs, num_candidates, num_samples)
-        clearance = clearance.min(dim=2).values
-
-        desired_direction = F.normalize(self.geodesic_gradient(self.position), dim=1)
-        heading_error = 1.0 - (
-            candidate_directions_world * desired_direction.unsqueeze(1)
-        ).sum(dim=2).clamp(-1.0, 1.0)
-
-        progress_norm = self._normalize_candidate_scores(progress)
-        clearance_norm = self._normalize_candidate_scores(clearance)
-        scores = (
-            progress_weight * progress_norm
-            + clearance_weight * clearance_norm
-            - heading_weight * heading_error
-        )
-        normalized_scores = self._normalize_candidate_scores(scores)
-        best_indices = scores.argmax(dim=1)
-        metrics = {
-            "planner_progress": progress_norm.mean().detach(),
-            "planner_clearance": clearance_norm.mean().detach(),
-            "planner_heading_error": heading_error.mean().detach(),
-        }
-        return {
-            "scores": normalized_scores.detach(),
-            "best_indices": best_indices.detach(),
-            "metrics": metrics,
-        }
 
     def get_reward(self, action=None) -> th.Tensor:
         """
@@ -429,11 +343,8 @@ class NavigationEnv(BaseEnv):
         falloff_dis = self.reward_kwargs.get("falloff_dis", 1.0)
         safe_view_degrees = self.reward_kwargs.get("safe_view_degrees", 10.0)
         vel_thresh_slerp_yaw = self.reward_kwargs.get("vel_thresh_slerp_yaw", 1.0)
-        use_geodesic_reward_direction = self.reward_kwargs.get(
-            "use_geodesic_reward_direction", True
-        )
 
-        if self.scene_manager.load_geodesics and use_geodesic_reward_direction:
+        if self.scene_manager.load_geodesics:
             # only compute geodesic loss if geodesics are loaded
             with th.no_grad():
                 geodesic_gradient = self.geodesic_gradient(self.position)

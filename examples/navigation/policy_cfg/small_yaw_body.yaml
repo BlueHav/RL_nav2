@@ -25,9 +25,9 @@ policy:
       concatenate: False
   net_arch:
     recurrent:
-      class: LSTMCell
+      class: GRUCell
       kwargs:
-        hidden_size: 256
+        hidden_size: 192
     mlp_layer: [4]
   activation_fn: leaky_relu
   output_activation_fn: acceleration_bounded_yaw

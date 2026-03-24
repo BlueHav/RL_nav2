@@ -67,13 +67,6 @@ env:
       orientation: [0, 0, 0]
       far: 10.
       near: 0.05
-  esdf_builder_kwargs:
-    window: 4
-    update_interval: 2
-    grid_resolution: 0.25
-    grid_size: [32, 32, 16]
-    projection_size: [12, 16]
-    clip_distance: 2.0
   target_kwargs:
     success_radius: 1.
   reward_kwargs:
@@ -87,6 +80,6 @@ env:
     lambda_yaw: 1.0
     lambda_vmax: 1.0
     falloff_dis: 1.0
-    use_geodesic_reward_direction: False
   max_episode_steps: 600
   device: cpu
+
